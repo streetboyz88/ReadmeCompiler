@@ -1,0 +1,49 @@
+name: Release
+
+# Runs when you push a version tag, e.g.  git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Check tag matches <Version> in the csproj
+        shell: bash
+        run: |
+          csproj_version=$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ReadmeCompiler.csproj)
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "csproj=$csproj_version tag=$tag_version"
+          if [ "$csproj_version" != "$tag_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$csproj_version</Version> in ReadmeCompiler.csproj"
+            exit 1
+          fi
+
+      - name: Test
+        run: dotnet test tests/ReadmeCompiler.Tests -c Release
+
+      - name: Publish single-file exe (win-x64, self-contained)
+        run: >
+          dotnet publish ReadmeCompiler.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      - name: Smoke test the published exe
+        shell: bash
+        run: ./publish/ReadmeCompiler.exe --version
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" publish/ReadmeCompiler.exe --title "$GITHUB_REF_NAME" --generate-notes
